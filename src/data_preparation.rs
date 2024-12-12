@@ -3,7 +3,7 @@ use csv::ReaderBuilder;
 use std::error::Error;
 use std::path::Path;
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone)]
 pub struct FlightRecord {
     #[serde(rename = "data_dte")]
     pub date_str: String,

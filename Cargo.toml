@@ -8,3 +8,8 @@ csv = "1.2"
 serde = { version = "1.0", features = ["derive"] }
 chrono = { version = "0.4", features = ["serde"] }
 itertools = "0.11"
+linfa = "0.7"
+linfa-clustering = "0.7"
+linfa-linear = "0.7"
+ndarray = "0.15"
+regex = "1.7"
