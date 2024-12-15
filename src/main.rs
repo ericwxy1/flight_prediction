@@ -1,15 +1,18 @@
 mod data_preparation;
 mod analysis;
+mod model_planning;
 use std::io::{self, Write};
 
 const ANALYSIS_SYNONYMS: &[&str] = &["analysis", "stats", "statistics", "insight", "report"];
 const AIRPORT_SYNONYMS: &[&str] = &["airport", "apt", "airfield"];
 const CARRIER_SYNONYMS: &[&str] = &["carrier", "airline", "airlines"];
+const PREDICTION_SYNONYMS: &[&str] = &["prediction", "future", "forecast", "projection"];
 
 #[derive(Debug, PartialEq)]
-enum Intent{
+enum Intent {
     AnalysisAirport(String),
     AnalysisCarrier(String),
+    PredictFuture(String),
     Unknown,
 }
 
@@ -24,17 +27,26 @@ fn main(){
     let cleaned = data_preparation::clean_data(records);
     println!("Loaded and cleaned {} records.", cleaned.len());
 
-    println!("Please enter your request, useing IATA code. For example:");
+    println!("Please enter your request, using IATA code. For example:");
     println!("- 'I want to see analysis for JFK airport'");
-    println!("- 'Show me a report of carrier 5Y'");
-    print!("> ");
-    io::stdout().flush().unwrap();
+    println!("- 'Show me a report of carrier AA'");
+    println!("- 'I want to see airline DL future prediction'");
+    println!("- 'Enter 'stop' to stop");
+    loop{
+        print!("> ");
+        io::stdout().flush().unwrap();
 
-    let mut user_input = String::new();
-    io::stdin().read_line(&mut user_input).expect("Failed to read input");
-    let user_input = user_input.trim().to_string();
+        let mut user_input = String::new();
+        io::stdin().read_line(&mut user_input).expect("Failed to read input");
+        let user_input = user_input.trim().to_string();
 
-    handle_query(&user_input, &cleaned);
+        if user_input.to_lowercase() == "stop" {
+            println!("Stopping the program as requested.");
+            break;
+        }
+
+        handle_query(&user_input, &cleaned);
+    }
 }
 
 fn handle_query(query: &str, records: &[data_preparation::FlightRecord]){
@@ -53,44 +65,41 @@ fn handle_query(query: &str, records: &[data_preparation::FlightRecord]){
             );
             show_filtered_analysis(&format!("airline {}", airline_code), &filtered);
         },
+        Intent::PredictFuture(airline_code) => {
+            println!("Predicting future trends for carrier {}", airline_code);
+            let filtered = filter_records(records, |r|
+                r.carrier.eq_ignore_ascii_case(&airline_code)
+            );
+            let historical = extract_monthly_aggregates(&filtered);
+            model_planning::predict_future_trends(&historical);
+        },
         Intent::Unknown => {
             println!("Sorry, I couldn't understand your request. Please try rephrasing.");
         },
     }
 }
 
-fn extract_code(tokens: &[&str], synonym_index: usize, validation: impl Fn(&str) -> bool) -> Option<String>{
-    if synonym_index + 1 < tokens.len(){
-        let potential_code = tokens[synonym_index + 1];
-        if validation(potential_code) {
-            return Some(potential_code.to_uppercase());
-        }
-    }
-    if synonym_index >= 1{
-        let potential_code = tokens[synonym_index - 1];
-        if validation(potential_code) {
-            return Some(potential_code.to_uppercase());
-        }
-    }
-    None
-}
+fn recognize_intent(query: &str) -> Intent{
+    let query_lower = query.to_lowercase();
+    let tokens: Vec<&str> = query_lower.split_whitespace()
+        .map(|word| word.trim_matches(|c: char| !c.is_alphanumeric() && c != '-'))
+        .collect();
 
-fn find_first_code(tokens: &[&str], synonyms: &[&str], validation: impl Fn(&str) -> bool) -> Option<String>{
-    for (i, &word) in tokens.iter().enumerate(){
-        if synonyms.contains(&word) {
-            if let Some(code) = extract_code(tokens, i, &validation) {
-                return Some(code);
+    let has_analysis = tokens.iter().any(|word| ANALYSIS_SYNONYMS.contains(word));
+    let has_prediction = tokens.iter().any(|word| PREDICTION_SYNONYMS.contains(word));
+
+    if has_prediction {
+        for i in 0..tokens.len(){
+            if CARRIER_SYNONYMS.contains(&tokens[i]) && i + 1 < tokens.len(){
+                let carrier_code = tokens[i + 1].to_uppercase();
+                if (carrier_code.len() == 2 || carrier_code.len() == 3) && carrier_code.chars().all(|c| c.is_alphanumeric()) {
+                    return Intent::PredictFuture(carrier_code);
+                }
             }
         }
     }
-    None
-}
 
-pub fn recognize_intent(query: &str) -> Intent{
-    let query_lower = query.to_lowercase();
-    let tokens: Vec<&str> = query_lower.split_whitespace().collect();
-
-    if !tokens.iter().any(|word| ANALYSIS_SYNONYMS.contains(word)){
+    if !has_analysis && !has_prediction{
         return Intent::Unknown;
     }
 
@@ -113,6 +122,39 @@ pub fn recognize_intent(query: &str) -> Intent{
     }
 }
 
+fn find_first_code(tokens: &[&str], synonyms: &[&str], validation: impl Fn(&str) -> bool) -> Option<String>{
+    for (i, &word) in tokens.iter().enumerate(){
+        if synonyms.contains(&word) {
+            if let Some(code) = extract_code(tokens, i, &validation) {
+                return Some(code);
+            }
+        }
+    }
+    None
+}
+
+fn extract_code(tokens: &[&str], synonym_index: usize, validation: impl Fn(&str) -> bool) -> Option<String>{
+    if synonym_index + 1 < tokens.len(){
+        let potential_code = tokens[synonym_index + 1];
+        if validation(potential_code) {
+            return Some(potential_code.to_uppercase());
+        }
+    }
+    if synonym_index >= 1{
+        let potential_code = tokens[synonym_index - 1];
+        if validation(potential_code) {
+            return Some(potential_code.to_uppercase());
+        }
+    }
+    None
+}
+
+fn extract_monthly_aggregates(filtered: &[&data_preparation::FlightRecord]) -> Vec<analysis::MonthlyAggregate> {
+    let owned_records: Vec<data_preparation::FlightRecord> = filtered.iter().map(|r| (*r).clone()).collect();
+    analysis::aggregate_by_month(&owned_records)
+}
+
+
 fn filter_records<'a, F>(records: &'a [data_preparation::FlightRecord], predicate: F) -> Vec<&'a data_preparation::FlightRecord>
 where
     F: Fn(&data_preparation::FlightRecord) -> bool,
@@ -127,7 +169,7 @@ fn show_filtered_analysis(label: &str, filtered: &[&data_preparation::FlightReco
     }
     let owned: Vec<data_preparation::FlightRecord> = filtered.iter().map(|r| (*r).clone()).collect();
     let monthly_aggregates = analysis::aggregate_by_month(&owned);
-    analysis::print_monthly_aggregation(&monthly_aggregates);
+    analysis::plot_monthly_aggregation(&monthly_aggregates);
     println!("(Top foreign airports related to {}):", label);
     analysis::find_top_foreign_airports(&owned, 5);
 }
@@ -176,5 +218,19 @@ mod tests {
         let query = "analysis for jfk airport";
         let intent = recognize_intent(query);
         assert_eq!(intent, Intent::AnalysisAirport("JFK".to_string()));
+    }
+
+    #[test]
+    fn test_recognize_intent_predict_future_standard() {
+        let query = "I want to see airline AA future prediction";
+        let intent = recognize_intent(query);
+        assert_eq!(intent, Intent::PredictFuture("AA".to_string()));
+    }
+
+    #[test]
+    fn test_recognize_intent_predict_future_missing_airline_code() {
+        let query = "I want to see future prediction";
+        let intent = recognize_intent(query);
+        assert_eq!(intent, Intent::Unknown);
     }
 }
